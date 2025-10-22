@@ -87,12 +87,20 @@ func PasswordGenerator(secretRefFieldPath, toggleFieldPath string) config.NewIni
 			if err != nil {
 				return errors.Wrap(err, "cannot pave object")
 			}
-			sel := &v1.SecretKeySelector{}
+			// Namespaced resources reference secrets in the same namespace using
+			// a LocalSecretKeySelector which doesn't contain a Namespace field.
+			// Unmarshal into that type and default the namespace to the managed
+			// resource's namespace when performing API operations.
+			sel := &v1.LocalSecretKeySelector{}
 			if err := paved.GetValueInto(secretRefFieldPath, sel); err != nil {
-				return errors.Wrapf(xpresource.Ignore(fieldpath.IsNotFound, err), "cannot unmarshal %s into a secret key selector", secretRefFieldPath)
+				return errors.Wrapf(xpresource.Ignore(fieldpath.IsNotFound, err), "cannot unmarshal %s into a local secret key selector", secretRefFieldPath)
 			}
 			s := &corev1.Secret{}
-			if err := client.Get(ctx, types.NamespacedName{Namespace: sel.Namespace, Name: sel.Name}, s); xpresource.IgnoreNotFound(err) != nil {
+			// LocalSecretKeySelector points to a Secret in the same namespace as
+			// the managed resource. Use mg.GetNamespace() as the namespace when
+			// getting/creating the Secret.
+			ns := mg.GetNamespace()
+			if err := client.Get(ctx, types.NamespacedName{Namespace: ns, Name: sel.Name}, s); xpresource.IgnoreNotFound(err) != nil {
 				return errors.Wrap(err, ErrGetPasswordSecret)
 			}
 			if err == nil && len(s.Data[sel.Key]) != 0 {
@@ -113,7 +121,7 @@ func PasswordGenerator(secretRefFieldPath, toggleFieldPath string) config.NewIni
 				return errors.Wrap(err, "cannot generate password")
 			}
 			s.SetName(sel.Name)
-			s.SetNamespace(sel.Namespace)
+			s.SetNamespace(ns)
 			if !meta.WasCreated(s) {
 				// We don't want to own the Secret if it is created by someone
 				// else, otherwise the deletion of the managed resource will
